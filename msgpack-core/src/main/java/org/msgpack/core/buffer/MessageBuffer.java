@@ -84,29 +84,7 @@ public class MessageBuffer
             boolean isGAE = System.getProperty("com.google.appengine.runtime.version") != null;
 
             // For Java6, android and JVM that has no Unsafe class, use Universal MessageBuffer (based on ByteBuffer).
-            useUniversalBuffer =
-                    Boolean.parseBoolean(System.getProperty("msgpack.universal-buffer", "false"))
-                            || isAndroid
-                            || isGAE
-                            || javaVersion < 7
-                            || !hasUnsafe;
-
-            if (!useUniversalBuffer) {
-                // Fetch theUnsafe object for Oracle and OpenJDK
-                Field field = Unsafe.class.getDeclaredField("theUnsafe");
-                field.setAccessible(true);
-                unsafeInstance = (Unsafe) field.get(null);
-                if (unsafeInstance == null) {
-                    throw new RuntimeException("Unsafe is unavailable");
-                }
-                arrayByteBaseOffset = unsafeInstance.arrayBaseOffset(byte[].class);
-                int arrayByteIndexScale = unsafeInstance.arrayIndexScale(byte[].class);
-
-                // Make sure the VM thinks bytes are only one byte wide
-                if (arrayByteIndexScale != 1) {
-                    throw new IllegalStateException("Byte array index scale must be 1, but is " + arrayByteIndexScale);
-                }
-            }
+            useUniversalBuffer = true;
         }
         catch (Exception e) {
             e.printStackTrace(System.err);
