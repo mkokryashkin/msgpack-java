@@ -38,38 +38,12 @@ import static org.msgpack.core.Preconditions.checkArgument;
  */
 public class MessageBuffer
 {
-    static final int javaVersion = getJavaVersion();
     private final ByteBuffer wrap;
 
     /**
      * The offset from the object memory header to its byte array data
      */
     static final int ARRAY_BYTE_BASE_OFFSET = 16;
-
-    private static int getJavaVersion()
-    {
-        String javaVersion = System.getProperty("java.specification.version", "");
-        int dotPos = javaVersion.indexOf('.');
-        if (dotPos != -1) {
-            try {
-                int major = Integer.parseInt(javaVersion.substring(0, dotPos));
-                int minor = Integer.parseInt(javaVersion.substring(dotPos + 1));
-                return major > 1 ? major : minor;
-            }
-            catch (NumberFormatException e) {
-                e.printStackTrace(System.err);
-            }
-        }
-        else {
-            try {
-                return Integer.parseInt(javaVersion);
-            }
-            catch (NumberFormatException e) {
-                e.printStackTrace(System.err);
-            }
-        }
-        return 6;
-    }
 
     /**
      * Base object for resolving the relative address of the raw byte array.
