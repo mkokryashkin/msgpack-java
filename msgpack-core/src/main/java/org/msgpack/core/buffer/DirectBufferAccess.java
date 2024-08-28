@@ -23,7 +23,6 @@ import java.nio.ByteBuffer;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 
-import sun.misc.Unsafe;
 import sun.nio.ch.DirectBuffer;
 
 /**
@@ -163,18 +162,6 @@ class DirectBufferAccess
 
     private static void setupCleanerJava9(final ByteBuffer direct)
     {
-        Object obj = AccessController.doPrivileged(new PrivilegedAction<Object>()
-        {
-            @Override
-            public Object run()
-            {
-                return getInvokeCleanerMethod(direct);
-            }
-        });
-        if (obj instanceof Throwable) {
-            throw new RuntimeException((Throwable) obj);
-        }
-        mInvokeCleaner = (Method) obj;
     }
 
     /**
@@ -229,32 +216,6 @@ class DirectBufferAccess
         }
     }
 
-    /**
-     * Checks if we have a usable {@link Unsafe#invokeCleaner}.
-     *
-     * @param direct a direct buffer
-     * @return the method or an error
-     */
-    private static Object getInvokeCleanerMethod(ByteBuffer direct)
-    {
-        try {
-            // See https://bugs.openjdk.java.net/browse/JDK-8171377
-            Method m = MessageBuffer.unsafe.getClass().getDeclaredMethod(
-                    "invokeCleaner", ByteBuffer.class);
-            m.invoke(MessageBuffer.unsafe, direct);
-            return m;
-        }
-        catch (NoSuchMethodException e) {
-            return e;
-        }
-        catch (InvocationTargetException e) {
-            return e;
-        }
-        catch (IllegalAccessException e) {
-            return e;
-        }
-    }
-
     static long getAddress(Buffer buffer)
     {
         return ((DirectBuffer) buffer).address();
@@ -263,13 +224,8 @@ class DirectBufferAccess
     static void clean(Object base)
     {
         try {
-            if (MessageBuffer.javaVersion <= 8) {
-                Object cleaner = mCleaner.invoke(base);
-                mClean.invoke(cleaner);
-            }
-            else {
-                mInvokeCleaner.invoke(MessageBuffer.unsafe, base);
-            }
+        Object cleaner = mCleaner.invoke(base);
+        mClean.invoke(cleaner);
         }
         catch (Throwable e) {
             throw new RuntimeException(e);

@@ -15,16 +15,11 @@
 //
 package org.msgpack.core.buffer;
 
-import sun.misc.Unsafe;
-
 import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 
-import static org.msgpack.core.Preconditions.checkArgument;
 import static org.msgpack.core.Preconditions.checkNotNull;
 
 /**
@@ -43,10 +38,9 @@ import static org.msgpack.core.Preconditions.checkNotNull;
  * without Unsafe API (such as Android), implementation falls back to an universal implementation that uses ByteBuffer
  * internally.
  */
-public class MessageBuffer
+public abstract class MessageBuffer
 {
     static final boolean isUniversalBuffer;
-    static final Unsafe unsafe;
     static final int javaVersion = getJavaVersion();
 
     /**
@@ -65,99 +59,34 @@ public class MessageBuffer
     private static final String DEFAULT_MESSAGE_BUFFER = "org.msgpack.core.buffer.MessageBuffer";
 
     static {
-        boolean useUniversalBuffer = false;
-        Unsafe unsafeInstance = null;
         int arrayByteBaseOffset = 16;
+        // Initialize the static fields
+        ARRAY_BYTE_BASE_OFFSET = arrayByteBaseOffset;
+
+        // Switch MessageBuffer implementation according to the environment
+        isUniversalBuffer = true;
+        String bufferClsName = UNIVERSAL_MESSAGE_BUFFER;
 
         try {
-            boolean hasUnsafe = false;
-            try {
-                hasUnsafe = Class.forName("sun.misc.Unsafe") != null;
-            }
-            catch (Exception e) {
-            }
+            // We need to use reflection here to find MessageBuffer implementation classes because
+            // importing these classes creates TypeProfile and adds some overhead to method calls.
 
-            // Detect android VM
-            boolean isAndroid = System.getProperty("java.runtime.name", "").toLowerCase().contains("android");
+            // MessageBufferX (default, BE or U) class
+            Class<?> bufferCls = Class.forName(bufferClsName);
 
-            // Is Google App Engine?
-            boolean isGAE = System.getProperty("com.google.appengine.runtime.version") != null;
+            // MessageBufferX(byte[]) constructor
+            Constructor<?> mbArrCstr = bufferCls.getDeclaredConstructor(byte[].class, int.class, int.class);
+            mbArrCstr.setAccessible(true);
+            mbArrConstructor = mbArrCstr;
 
-            // For Java6, android and JVM that has no Unsafe class, use Universal MessageBuffer (based on ByteBuffer).
-            useUniversalBuffer =
-                    Boolean.parseBoolean(System.getProperty("msgpack.universal-buffer", "false"))
-                            || isAndroid
-                            || isGAE
-                            || javaVersion < 7
-                            || !hasUnsafe;
-
-            if (!useUniversalBuffer) {
-                // Fetch theUnsafe object for Oracle and OpenJDK
-                Field field = Unsafe.class.getDeclaredField("theUnsafe");
-                field.setAccessible(true);
-                unsafeInstance = (Unsafe) field.get(null);
-                if (unsafeInstance == null) {
-                    throw new RuntimeException("Unsafe is unavailable");
-                }
-                arrayByteBaseOffset = unsafeInstance.arrayBaseOffset(byte[].class);
-                int arrayByteIndexScale = unsafeInstance.arrayIndexScale(byte[].class);
-
-                // Make sure the VM thinks bytes are only one byte wide
-                if (arrayByteIndexScale != 1) {
-                    throw new IllegalStateException("Byte array index scale must be 1, but is " + arrayByteIndexScale);
-                }
-            }
+            // MessageBufferX(ByteBuffer) constructor
+            Constructor<?> mbBBCstr = bufferCls.getDeclaredConstructor(ByteBuffer.class);
+            mbBBCstr.setAccessible(true);
+            mbBBConstructor = mbBBCstr;
         }
         catch (Exception e) {
             e.printStackTrace(System.err);
-            // Use MessageBufferU
-            useUniversalBuffer = true;
-        }
-        finally {
-            // Initialize the static fields
-            unsafe = unsafeInstance;
-            ARRAY_BYTE_BASE_OFFSET = arrayByteBaseOffset;
-
-            // Switch MessageBuffer implementation according to the environment
-            isUniversalBuffer = useUniversalBuffer;
-            String bufferClsName;
-            if (isUniversalBuffer) {
-                bufferClsName = UNIVERSAL_MESSAGE_BUFFER;
-            }
-            else {
-                // Check the endian of this CPU
-                boolean isLittleEndian = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
-                bufferClsName = isLittleEndian ? DEFAULT_MESSAGE_BUFFER : BIGENDIAN_MESSAGE_BUFFER;
-            }
-
-            if (DEFAULT_MESSAGE_BUFFER.equals(bufferClsName)) {
-                // No need to use reflection here, we're not using a MessageBuffer subclass.
-                mbArrConstructor = null;
-                mbBBConstructor = null;
-            }
-            else {
-                try {
-                    // We need to use reflection here to find MessageBuffer implementation classes because
-                    // importing these classes creates TypeProfile and adds some overhead to method calls.
-
-                    // MessageBufferX (default, BE or U) class
-                    Class<?> bufferCls = Class.forName(bufferClsName);
-
-                    // MessageBufferX(byte[]) constructor
-                    Constructor<?> mbArrCstr = bufferCls.getDeclaredConstructor(byte[].class, int.class, int.class);
-                    mbArrCstr.setAccessible(true);
-                    mbArrConstructor = mbArrCstr;
-
-                    // MessageBufferX(ByteBuffer) constructor
-                    Constructor<?> mbBBCstr = bufferCls.getDeclaredConstructor(ByteBuffer.class);
-                    mbBBCstr.setAccessible(true);
-                    mbBBConstructor = mbBBCstr;
-                }
-                catch (Exception e) {
-                    e.printStackTrace(System.err);
-                    throw new RuntimeException(e); // No more fallback exists if MessageBuffer constructors are inaccessible
-                }
-            }
+            throw new RuntimeException(e); // No more fallback exists if MessageBuffer constructors are inaccessible
         }
     }
 
@@ -284,10 +213,7 @@ public class MessageBuffer
     private static MessageBuffer newMessageBuffer(byte[] arr, int off, int len)
     {
         checkNotNull(arr);
-        if (mbArrConstructor != null) {
-            return newInstance(mbArrConstructor, arr, off, len);
-        }
-        return new MessageBuffer(arr, off, len);
+        return newInstance(mbArrConstructor, arr, off, len);
     }
 
     /**
@@ -299,10 +225,7 @@ public class MessageBuffer
     private static MessageBuffer newMessageBuffer(ByteBuffer bb)
     {
         checkNotNull(bb);
-        if (mbBBConstructor != null) {
-            return newInstance(mbBBConstructor, bb);
-        }
-        return new MessageBuffer(bb);
+        return newInstance(mbBBConstructor, bb);
     }
 
     /**
@@ -341,16 +264,6 @@ public class MessageBuffer
 
     public static void releaseBuffer(MessageBuffer buffer)
     {
-        if (isUniversalBuffer || buffer.hasArray()) {
-            // We have nothing to do. Wait until the garbage-collector collects this array object
-        }
-        else if (DirectBufferAccess.isDirectByteBufferInstance(buffer.reference)) {
-            DirectBufferAccess.clean(buffer.reference);
-        }
-        else {
-            // Maybe cannot reach here
-            unsafe.freeMemory(buffer.address);
-        }
     }
 
     /**
@@ -424,31 +337,14 @@ public class MessageBuffer
 
     public MessageBuffer slice(int offset, int length)
     {
-        // TODO ensure deleting this slice does not collapse this MessageBuffer
-        if (offset == 0 && length == size()) {
-            return this;
-        }
-        else {
-            checkArgument(offset + length <= size());
-            return new MessageBuffer(base, address + offset, length);
-        }
+        return this;
     }
 
-    public byte getByte(int index)
-    {
-        return unsafe.getByte(base, address + index);
-    }
+    public abstract byte getByte(int index);
 
-    public boolean getBoolean(int index)
-    {
-        return unsafe.getBoolean(base, address + index);
-    }
+    public abstract boolean getBoolean(int index);
 
-    public short getShort(int index)
-    {
-        short v = unsafe.getShort(base, address + index);
-        return Short.reverseBytes(v);
-    }
+    public abstract short getShort(int index);
 
     /**
      * Read a big-endian int value at the specified index
@@ -456,34 +352,21 @@ public class MessageBuffer
      * @param index
      * @return
      */
-    public int getInt(int index)
-    {
-        // Reading little-endian value
-        int i = unsafe.getInt(base, address + index);
-        // Reversing the endian
-        return Integer.reverseBytes(i);
-    }
+    public abstract int getInt(int index);
 
     public float getFloat(int index)
     {
         return Float.intBitsToFloat(getInt(index));
     }
 
-    public long getLong(int index)
-    {
-        long l = unsafe.getLong(base, address + index);
-        return Long.reverseBytes(l);
-    }
+    public abstract long getLong(int index);
 
     public double getDouble(int index)
     {
         return Double.longBitsToDouble(getLong(index));
     }
 
-    public void getBytes(int index, byte[] dst, int dstOffset, int length)
-    {
-        unsafe.copyMemory(base, address + index, dst, ARRAY_BYTE_BASE_OFFSET + dstOffset, length);
-    }
+    public abstract void getBytes(int index, byte[] dst, int dstOffset, int length);
 
     public void getBytes(int index, int len, ByteBuffer dst)
     {
@@ -494,21 +377,11 @@ public class MessageBuffer
         dst.put(src);
     }
 
-    public void putByte(int index, byte v)
-    {
-        unsafe.putByte(base, address + index, v);
-    }
+    public abstract void putByte(int index, byte v);
 
-    public void putBoolean(int index, boolean v)
-    {
-        unsafe.putBoolean(base, address + index, v);
-    }
+    public abstract void putBoolean(int index, boolean v);
 
-    public void putShort(int index, short v)
-    {
-        v = Short.reverseBytes(v);
-        unsafe.putShort(base, address + index, v);
-    }
+    public abstract void putShort(int index, short v);
 
     /**
      * Write a big-endian integer value to the memory
@@ -516,65 +389,25 @@ public class MessageBuffer
      * @param index
      * @param v
      */
-    public void putInt(int index, int v)
-    {
-        // Reversing the endian
-        v = Integer.reverseBytes(v);
-        unsafe.putInt(base, address + index, v);
-    }
+    public abstract void putInt(int index, int v);
 
     public void putFloat(int index, float v)
     {
         putInt(index, Float.floatToRawIntBits(v));
     }
 
-    public void putLong(int index, long l)
-    {
-        // Reversing the endian
-        l = Long.reverseBytes(l);
-        unsafe.putLong(base, address + index, l);
-    }
+    public abstract void putLong(int index, long l);
 
     public void putDouble(int index, double v)
     {
         putLong(index, Double.doubleToRawLongBits(v));
     }
 
-    public void putBytes(int index, byte[] src, int srcOffset, int length)
-    {
-        unsafe.copyMemory(src, ARRAY_BYTE_BASE_OFFSET + srcOffset, base, address + index, length);
-    }
+    public abstract void putBytes(int index, byte[] src, int srcOffset, int length);
 
-    public void putByteBuffer(int index, ByteBuffer src, int len)
-    {
-        assert (len <= src.remaining());
-        assert (!isUniversalBuffer);
+    public abstract void putByteBuffer(int index, ByteBuffer src, int len);
 
-        if (src.isDirect()) {
-            unsafe.copyMemory(null, DirectBufferAccess.getAddress(src) + src.position(), base, address + index, len);
-            src.position(src.position() + len);
-        }
-        else if (src.hasArray()) {
-            byte[] srcArray = src.array();
-            unsafe.copyMemory(srcArray, ARRAY_BYTE_BASE_OFFSET + src.position(), base, address + index, len);
-            src.position(src.position() + len);
-        }
-        else {
-            if (hasArray()) {
-                src.get((byte[]) base, index, len);
-            }
-            else {
-                for (int i = 0; i < len; ++i) {
-                    unsafe.putByte(base, address + index, src.get());
-                }
-            }
-        }
-    }
-
-    public void putMessageBuffer(int index, MessageBuffer src, int srcOffset, int len)
-    {
-        unsafe.copyMemory(src.base, src.address + srcOffset, base, address + index, len);
-    }
+    public abstract void putMessageBuffer(int index, MessageBuffer src, int srcOffset, int len);
 
     /**
      * Create a ByteBuffer view of the range [index, index+length) of this memory
@@ -585,13 +418,7 @@ public class MessageBuffer
      */
     public ByteBuffer sliceAsByteBuffer(int index, int length)
     {
-        if (hasArray()) {
             return ByteBuffer.wrap((byte[]) base, (int) ((address - ARRAY_BYTE_BASE_OFFSET) + index), length);
-        }
-        else {
-            assert (!isUniversalBuffer);
-            return DirectBufferAccess.newByteBuffer(address, index, length, reference);
-        }
     }
 
     /**
@@ -614,12 +441,7 @@ public class MessageBuffer
      *
      * @return
      */
-    public byte[] toByteArray()
-    {
-        byte[] b = new byte[size()];
-        unsafe.copyMemory(base, address, b, ARRAY_BYTE_BASE_OFFSET, size());
-        return b;
-    }
+    public abstract byte[] toByteArray();
 
     public byte[] array()
     {
@@ -639,10 +461,7 @@ public class MessageBuffer
      * @param offset
      * @param length
      */
-    public void copyTo(int index, MessageBuffer dst, int offset, int length)
-    {
-        unsafe.copyMemory(base, address + index, dst.base, dst.address + offset, length);
-    }
+    public abstract void copyTo(int index, MessageBuffer dst, int offset, int length);
 
     public String toHexString(int offset, int length)
     {
